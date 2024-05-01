@@ -5,9 +5,10 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <string.h>
+#include <unistd.h>
 
 #define MAX_CLIENTS 3
-#define MAX_MESSAGES 100
+#define MAX_MESSAGES 3
 
 typedef struct {
     char nom[30];
@@ -16,33 +17,55 @@ typedef struct {
     int num_messages;
 } User;
 
-void *function(void *arg) {
-    int socket = *(int *)arg;
+typedef struct {
+    int socket;
+    struct sockaddr_in addr;
+    User user;
+} ClientInfo;
+
+ClientInfo clients[MAX_CLIENTS];
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void *handle_client(void *arg) {
+    int index = *(int *)arg;
+    int socket = clients[index].socket;
+    User *user = &clients[index].user;
+
     char msg[] = "Entrez votre nom et votre âge :";
     send(socket, msg, strlen(msg) + 1, 0);
 
-    User user;
-    recv(socket, &user, sizeof(user), 0);
-    printf("Le client s'appelle %s et a %d ans\n", user.nom, user.age);
+    recv(socket, user, sizeof(User), 0);
+    printf("Le client s'appelle %s et a %d ans\n", user->nom, user->age);
 
     char buffer[100];
-    int message_count = 0;
     do {
         recv(socket, buffer, sizeof(buffer), 0);
-        strcpy(user.messages[message_count++], buffer);
-    } while (strcmp(buffer, "fin") != 0);
+        printf("Message reçu de %s: %s\n", user->nom, buffer);
 
-    printf("Messages de l'utilisateur %s:\n", user.nom);
-    for (int i = 0; i < message_count - 1; i++) {
-        printf("%s\n", user.messages[i]);
-    }
+        pthread_mutex_lock(&mutex);
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (i != index && clients[i].socket != -1) {
+                send(clients[i].socket, buffer, strlen(buffer) + 1, 0);
+            }
+        }
+        pthread_mutex_unlock(&mutex);
+    } while (strcmp(buffer, "fin") != 0 && strcmp(buffer, "exit") != 0 && strcmp(buffer, "quit") != 0);
 
     close(socket);
+
+    pthread_mutex_lock(&mutex);
+    clients[index].socket = -1;
+    pthread_mutex_unlock(&mutex);
+
     free(arg);
     pthread_exit(NULL);
 }
 
 int main(void) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        clients[i].socket = -1;
+    }
+
     int socketServeur = socket(AF_INET, SOCK_STREAM, 0);
     if (socketServeur == -1) {
         printf("Erreur lors de la création du socket\n");
@@ -63,20 +86,43 @@ int main(void) {
     printf("Serveur en écoute...\n");
 
     pthread_t thread[MAX_CLIENTS];
-    for (int i = 0; i < MAX_CLIENTS; i++) {
+    int index[MAX_CLIENTS];
+    
+    while (1) {
         struct sockaddr_in addrClient;
         socklen_t csize = sizeof(addrClient);
         int socketClient = accept(socketServeur, (struct sockaddr *)&addrClient, &csize);
+
+        if (socketClient == -1) {
+            printf("Erreur lors de l'acceptation de la connexion\n");
+            continue;
+        }
+
         printf("Nouvelle connexion reçue\n");
 
-        int *arg = malloc(sizeof(int));
-        *arg = socketClient;
+        pthread_mutex_lock(&mutex);
+        int j;
+        for (j = 0; j < MAX_CLIENTS; j++) {
+            if (clients[j].socket == -1) {
+                clients[j].socket = socketClient;
+                clients[j].addr = addrClient;
+                index[j] = j;
+                pthread_create(&thread[j], NULL, handle_client, &index[j]);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&mutex);
 
-        pthread_create(&thread[i], NULL, function, arg);
+        if (j == MAX_CLIENTS) {
+            printf("Nombre maximal de clients atteint. Fermeture du serveur.\n");
+            break;
+        }
     }
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        pthread_join(thread[i], NULL);
+        if (clients[i].socket != -1) {
+            pthread_join(thread[i], NULL);
+        }
     }
 
     close(socketServeur);
