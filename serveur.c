@@ -6,7 +6,6 @@
 #include <pthread.h>
 #include <string.h>
 #include <unistd.h>
-#include <signal.h>
 
 #define MAX_CLIENTS 3
 #define MAX_MESSAGES 3
@@ -14,11 +13,9 @@
 typedef struct {
     char nom[30];
     int age;
+    int id; 
     char messages[MAX_MESSAGES][100];
     int num_messages;
-    int interrupt; // Nouvel attribut pour l'interruption
-    char saved_messages[MAX_MESSAGES][100]; // File d'attente pour les messages sauvegardés
-    int num_saved_messages; // Nombre de messages sauvegardés
 } User;
 
 typedef struct {
@@ -29,47 +26,43 @@ typedef struct {
 
 ClientInfo clients[MAX_CLIENTS];
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t id_mutex = PTHREAD_MUTEX_INITIALIZER;
+int next_id = 1;
+
+// Fonction pour obtenir un nouvel identifiant unique
+int get_next_id() {
+    pthread_mutex_lock(&id_mutex);
+    int id = next_id++;
+    pthread_mutex_unlock(&id_mutex);
+    return id;
+}
 
 void *handle_client(void *arg) {
     int index = *(int *)arg;
     int socket = clients[index].socket;
     User *user = &clients[index].user;
 
-    char msg[] = "Entrez votre nom et votre âge :";
-    send(socket, msg, strlen(msg) + 1, 0);
+   
+    user->id = get_next_id();
 
-    recv(socket, user, sizeof(User), 0);
-    printf("Le client s'appelle %s et a %d ans\n", user->nom, user->age);
+    char msg[100];
+    sprintf(msg, "Bienvenue! Vous êtes le client #%d", user->id);
+    send(socket, msg, strlen(msg) + 1, 0);
 
     char buffer[100];
     do {
-        // Vérifier si une interruption est demandée
-        if (user->interrupt) {
-            // Afficher les messages sauvegardés pendant l'interruption
-            for (int i = 0; i < user->num_saved_messages; i++) {
-                send(socket, user->saved_messages[i], strlen(user->saved_messages[i]) + 1, 0);
-            }
-            user->interrupt = 0; // Réinitialiser l'interruption
-        }
-
         recv(socket, buffer, sizeof(buffer), 0);
-        printf("Message reçu de %s: %s\n", user->nom, buffer);
+        printf("Message reçu de %s (#%d): %s\n", user->nom, user->id, buffer);
 
-        // Sauvegarder les messages pendant l'interruption
-        if (strcmp(buffer, "interrupt") == 0) {
-            user->interrupt = 1;
-            user->num_saved_messages = 0; // Réinitialiser la file d'attente des messages sauvegardés
-        } else if (user->interrupt) {
-            strcpy(user->saved_messages[user->num_saved_messages++], buffer);
-        } else {
-            pthread_mutex_lock(&mutex);
-            for (int i = 0; i < MAX_CLIENTS; i++) {
-                if (i != index && clients[i].socket != -1) {
-                    send(clients[i].socket, buffer, strlen(buffer) + 1, 0);
-                }
+        
+        pthread_mutex_lock(&mutex);
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (i != index && clients[i].socket != -1) {
+                sprintf(msg, "[%s (#%d)]: %s", user->nom, user->id, buffer);
+                send(clients[i].socket, msg, strlen(msg) + 1, 0);
             }
-            pthread_mutex_unlock(&mutex);
         }
+        pthread_mutex_unlock(&mutex);
     } while (strcmp(buffer, "fin") != 0 && strcmp(buffer, "exit") != 0 && strcmp(buffer, "quit") != 0);
 
     close(socket);
@@ -82,16 +75,7 @@ void *handle_client(void *arg) {
     pthread_exit(NULL);
 }
 
-void sigusr1_handler(int signum) {
-    if (signum == SIGUSR1) {
-        printf("Interruption demandée. Envoi du message spécial au serveur...\n");
-        // Code pour envoyer un message spécial au serveur indiquant l'interruption
-    }
-}
-
 int main(void) {
-    signal(SIGUSR1, sigusr1_handler);
-
     for (int i = 0; i < MAX_CLIENTS; i++) {
         clients[i].socket = -1;
     }
