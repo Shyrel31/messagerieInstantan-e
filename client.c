@@ -1,14 +1,24 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <signal.h>
 
 typedef struct {
     char nom[30];
     int age;
 } User;
+
+void sigusr1_handler(int signum) {
+    if (signum == SIGUSR1) {
+        printf("Interruption demandée. Envoi du message spécial au serveur...\n");
+        // Code pour envoyer un message spécial au serveur indiquant l'interruption
+    }
+}
 
 void *recevoir_messages(void *arg) {
     int socketClient = *((int *)arg);
@@ -26,6 +36,8 @@ void *recevoir_messages(void *arg) {
 }
 
 int main() {
+    signal(SIGUSR1, sigusr1_handler); 
+
     int socketClient = socket(AF_INET, SOCK_STREAM, 0);
     if (socketClient == -1) {
         printf("Erreur lors de la création du socket\n");
@@ -56,23 +68,25 @@ int main() {
     printf("%s\n", msg);
 
     User user;
-    printf("Entrez votre nom et votre âge : ");
     scanf("%s %d", user.nom, &user.age);
 
     send(socketClient, &user, sizeof(user), 0);
 
     char message[100];
-    printf("Entrez vos messages (tapez 'fin' pour terminer) :\n");
+    printf("Entrez vos messages (tapez 'interrupt' pour demander une interruption et 'fin' pour terminer) :\n");
     while (1) {
         scanf("%s", message);
         send(socketClient, message, strlen(message) + 1, 0);
 
-        // commande de déconnexion qui ne marche pas quand on n'est pas dans le texte
-        if (strcmp(message, "exit") == 0 || strcmp(message, "quit") == 0) {
+        // Vérifier si une interruption est demandée
+        if (strcmp(message, "interrupt") == 0) {
+            kill(getpid(), SIGUSR1); // Envoyer le signal SIGUSR1 (Ctrl+I) pour demander une interruption
+        }
+
+        if (strcmp(message, "fin") == 0 || strcmp(message, "exit") == 0 || strcmp(message, "quit") == 0) {
             break;
         }
 
-       
         printf("En attente d'une réponse du serveur...\n");
         if (recv(socketClient, msg, sizeof(msg), 0) == -1) {
             printf("Erreur lors de la réception du message du serveur\n");
