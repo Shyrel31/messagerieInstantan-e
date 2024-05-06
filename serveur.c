@@ -29,7 +29,7 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t id_mutex = PTHREAD_MUTEX_INITIALIZER;
 int next_id = 1;
 
-// Fonction pour obtenir un nouvel identifiant unique
+
 int get_next_id() {
     pthread_mutex_lock(&id_mutex);
     int id = next_id++;
@@ -45,7 +45,7 @@ void *handle_client(void *arg) {
    
     user->id = get_next_id();
 
-    char msg[100];
+    char msg[10000];
     sprintf(msg, "Bienvenue! Vous êtes le client #%d", user->id);
     send(socket, msg, strlen(msg) + 1, 0);
 
